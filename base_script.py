@@ -7,12 +7,33 @@ from re import (
     DOTALL
 )
 # reference: https://docs.python.org/3/howto/regex.html
+from os.path import isfile
 
 USERNAME = None
 PASSWORD = None
 IP = None
 PROTOCOL = None
 PORT = None
+
+COMMANDS_FILE = 'commands.txt'
+OUTPUT_FILE = 'output.txt'
+
+show_version_re = (
+    'Version\s*:\s*(?P<version>\S+).*'
+    'Build\sDate\s*:\s*(?P<build_date>\d+-\d+-\d+\s\d+:\d+:\d+\s\S+).*'
+    'Build\sID\s*:\s*(?P<build_id>\S+).*'
+    'Build\sSHA\s*:\s*\S+.*'
+    'Hot\s+Patches\s*:\s*(?P<hot_patches>\S+)?.*'
+    'Active\sImage\s*:\s*(?P<active_image>\S+).*'
+    'Service\sOS\sVersion\s*:\s*(?P<service_os_version>\S+).*'
+    'BIOS\sVersion\s*:\s(?P<bios_version>\S+)'
+)
+
+show_system_re = (
+    'Hostname\s*:\s*(?P<hostname>\S+).*'
+    'System\s+Description\s*:\s*(?P<description>\S+).*'
+    'System\s*Contact\s*:\s*(?P<contact>\S+)?.*System'
+)
 
 
 def parse_arguments():
@@ -44,6 +65,22 @@ def parse_arguments():
     PORT = args.port
 
 
+def parse_show_system(connection):
+    connection.sendline('show system')
+    connection.expect('[#$]')
+    cmd_output = connection.before.decode('utf-8')
+    print(f'command output: {cmd_output}\n')
+
+    result = {}
+    re_result = re_search(show_system_re, cmd_output, DOTALL)
+    assert re_result, "Unable to parse command output"
+    result = re_result.groupdict()
+
+    print('Parsing results:\n')
+    for key, value in result.items():
+        print(f'{key} : {value}')
+
+
 parse_arguments()
 
 print(f'''Going to use following parameters:
@@ -58,6 +95,10 @@ with username: "{USERNAME}" and password: "{PASSWORD}"''')
 
 if 'telnet' in PROTOCOL:
     connection = pexpect.spawn(f'{PROTOCOL} {IP} {PORT}')
+
+    fout = open('mylog.txt','wb')
+    connection.logfile = fout
+
     connection.sendline()
     connection.expect('login: $')
     connection.sendline(USERNAME)
@@ -74,33 +115,34 @@ else:
 connection.sendline(PASSWORD)
 connection.expect('[#$]')
 print('Connected!')
-connection.sendline('show version')
+
+parse_show_system(connection)
+
+connection.sendline('no page')
 connection.expect('[#$]')
+
+print('\nRead and execute commands from file...\n')
+
+if isfile(COMMANDS_FILE):
+    cmd_file = open(COMMANDS_FILE, 'r')
+    for line in cmd_file:
+        print(f'sending command: {line.strip()}')
+        connection.sendline(line.strip())
+        connection.expect('[#$]')
+
 cmd_output = connection.before.decode('utf-8')
-print(f'command output: {cmd_output}\n')
 
-show_version_re = (
-    'Version\s*:\s*(?P<version>\S+).*'
-    'Build\sDate\s*:\s*(?P<build_date>\d+-\d+-\d+\s\d+:\d+:\d+\s\S+).*'
-    'Build\sID\s*:\s*(?P<build_id>\S+).*'
-    'Build\sSHA\s*:\s*\S+.*'
-    'Hot\s+Patches\s*:\s*(?P<hot_patches>\S+)?.*'
-    'Active\sImage\s*:\s*(?P<active_image>\S+).*'
-    'Service\sOS\sVersion\s*:\s*(?P<service_os_version>\S+).*'
-    'BIOS\sVersion\s*:\s(?P<bios_version>\S+)'
-)
+connection.sendline('show running-config')
+connection.expect('[#$]', timeout=60)
+cmd_output = connection.before.decode('utf-8')
 
-result = {}
-re_result = re_search(show_version_re, cmd_output, DOTALL)
-assert re_result, "Unable to parse command output"
-result = re_result.groupdict()
-
-print('Parsing results:\n')
-for key, value in result.items():
-    print(f'{key} : {value}')
+output_file = open(OUTPUT_FILE, 'w')
+for line in cmd_output:
+    output_file.write(line)
 
 print('\nBye!')
 connection.sendline('exit')
 if 'telnet' in PROTOCOL:
     connection.expect('login: $')
+
 connection.close()
